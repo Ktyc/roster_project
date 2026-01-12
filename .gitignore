@@ -1,0 +1,12 @@
+venv/
+# Excel temporary files
+~$*.xlsx
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Instructions
+Duty Roster Policy Scheduling.md
+pairprogramming.md
+requirements.txt
