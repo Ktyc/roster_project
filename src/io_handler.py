@@ -1,10 +1,35 @@
 import pandas as pd
 from src.models import Staff, Role
 from datetime import datetime, date
+from typing import List, Union
+import io
 
-def load_staff_from_excel(filepath: str):
-    df = pd.read_excel(filepath)
+def load_staff_from_excel(file_source: Union[str, io.BytesIO]) -> List[Staff]:
+    """
+    GOOGLE STYLE FORMAT 
+
+    A brief summary of what the function does. (The 'Headline')
+
+    Args:
+        parameter_name: A description of what this input should be.
+
+    Returns:
+        A description of what the function hands back to you.
+    """
+    
+    """
+    Loads staff data from an Excel file path or a file-like object.
+    
+    Args:
+        file_source: The path to the Excel file or a BytesIO stream from Streamlit.
+        
+    Returns:
+        List[Staff]: A list of validated Staff objects.
+    """
+
+    df = pd.read_excel(file_source)
     staff_list = []
+
     # creates a Staff object for every row in Excel
     for index, row in df.iterrows(): # index is a auto created column starting from 0 etc, row just goes through each row in the excel file
         # Handle blackout dates and convert to set format to fit with blackout_dates variable in models.py
