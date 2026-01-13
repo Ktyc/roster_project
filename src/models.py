@@ -14,7 +14,7 @@ class ShiftType(Enum):
     WEEKDAY_PM = (1, 1.0)
     WEEKEND_AM = (2, 2.0)
     WEEKEND_PM = (3, 2.0)
-    # PUBLIC_HOL = (4, 3.0)
+    PUBLIC_HOL = (4, 3.0)
     
     def __init__(self, id, points):
         self.id = id

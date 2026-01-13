@@ -1,17 +1,20 @@
 from datetime import date
 import calendar 
-from typing import List # clarify
+from typing import List
 from src.models import Shift, ShiftType, Staff, Role
 from src.io_handler import load_staff_from_excel
 from ortools.sat.python import cp_model
 
-def generate_month_shifts(year: int, month:int): # generates a shift for every day in the month of that particular year
+def generate_month_shifts(year: int, month:int, holidays: List[date]=None): # generates a shift for every day in the month of that particular year
     shifts = []
+    holidays = holidays or []
     # calendar.monthrange(year, month) returns tuple (first_day_of_week, num_days_in_month)
     _, num_days = calendar.monthrange(year, month) # _, num_days shows that I understand that 2 field will be generated, first_day_of_week and num_days_in_month, however I dont intend to use first one and hence _ is used
     for day in range(1, num_days + 1):
         current_date = date(year, month, day)
-        if current_date.weekday() >= 5: # if weekend: (Satuday=5, Sunday=6)
+        if current_date in holidays:
+            shifts.append(Shift(date=current_date, type=ShiftType.PUBLIC_HOL))
+        elif current_date.weekday() >= 5: # if weekend: (Satuday=5, Sunday=6)
             shifts.append(Shift(date=current_date, type=ShiftType.WEEKEND_AM))
             shifts.append(Shift(date=current_date, type=ShiftType.WEEKEND_PM))
         else: # current_date is a weekday
@@ -21,10 +24,10 @@ def generate_month_shifts(year: int, month:int): # generates a shift for every d
 '''
     1. Account for Shift Types and Roles (DONE)
     2. Account for YTD scores (DONE)
-    3. Account for PM Shifts where Staff do not need to work the next day
+    3. Account for PM Shifts where Staff do not need to work the next day (DONE)
     4. Account for voluntary basis
     5. Account for PHs
-    6. Account for blackout dates
+    6. Account for blackout dates (DONE)
 '''
 
 ''''WORKS WITH VARIABLES - GENERATES MULTIPLE ROSTERS AND TESTS IT OUT TO FIND MINIMUM PENALTY THAT SATISFIES ALL CONSTRAINTS '''
@@ -41,12 +44,6 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
             var_name = f"s{s_idx}_st{safe_name}"
             
             assignments[(staff.name, s_idx)] = model.NewBoolVar(var_name)
-    # for s_idx, shift in enumerate(shifts):
-    #     for staff in staff_list:   
-    #         clean_name = staff.name.replace(" ", "_")
-    #         var_name = f"shift_{s_idx}_staff_{clean_name}"
-    #         # It creates a special Google OR-Tools variable that can only be 0 or 1. It’s not a number yet; it’s a "decision" the computer has to make.
-    #         assignments[(staff.name, s_idx)] = model.NewBoolVar(var_name)
 
     # 2. Hard Constraint: Coverage
     # Every shift must have EXACTLY one person
@@ -62,7 +59,7 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
 
     # 4. Hard Constraint: The Rest Rule
     for s_idx, current_shift in enumerate(shifts):
-        if current_shift.type in [ShiftType.WEEKDAY_PM, ShiftType.WEEKEND_PM]:
+        if current_shift.type in [ShiftType.WEEKDAY_PM, ShiftType.WEEKEND_PM, ShiftType.PUBLIC_HOL]:
 
             # Now, look for any shift that happens "tomorrow"
             for next_s_idx, next_shift in enumerate(shifts):
@@ -80,14 +77,14 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
 
     # 5. Hard Constraint: NO_PM Role
     for s_idx, shift in enumerate(shifts):
-        if shift.type in [ShiftType.WEEKDAY_PM, ShiftType.WEEKEND_PM]:
+        if shift.type in [ShiftType.WEEKDAY_PM, ShiftType.WEEKEND_PM, ShiftType.PUBLIC_HOL]:
             for staff in staff_list:
                 if staff.role == Role.NO_PM:
                     model.Add(assignments[(staff.name, s_idx)] == 0)
 
     # 6. Hard Constraint: WEEKEND_ONLY staff cannot be assigned to weekdays 
     for s_idx, shift in enumerate(shifts):
-        if shift.date.weekday() in [0,1,2,3,4]: 
+        if shift.date.weekday() in [0,1,2,3,4] and shift.type != ShiftType.PUBLIC_HOL: 
             for staff in staff_list:
                 if staff.role == Role.WEEKEND_ONLY:
                     model.Add(assignments[(staff.name, s_idx)] == 0)
@@ -100,22 +97,12 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
     avg_shifts_per_person = num_shifts // num_staff
 
     for staff in staff_list:
-        staff_total_shifts = sum(assignments[(staff.name, s_idx)] for s_idx in range(len(shifts)))
-
-        # Clean name here too for the deviation variable!
-        safe_name = "".join(filter(str.isalnum, staff.name))
-        deviation = model.NewIntVar(0, num_shifts, f"dev_{safe_name}")
-        
-        model.Add(deviation >= staff_total_shifts - avg_shifts_per_person)
-        model.Add(deviation >= avg_shifts_per_person - staff_total_shifts)
-        total_penalties.append(deviation * 10)
-
-    for staff in staff_list:
         # 1 - Count total shifts for this person
         staff_total_shifts = sum(assignments[(staff.name, s_idx)] for s_idx in range(len(shifts)))
 
         # 2 - Calculate distance from average (The "Deviation")
-        deviation = model.NewIntVar(0, num_shifts, f"dev_{staff.name}")
+        safe_name = "".join(filter(str.isalnum, staff.name))
+        deviation = model.NewIntVar(0, num_shifts, f"dev_{safe_name}")
         model.Add(deviation >= staff_total_shifts - avg_shifts_per_person)
         model.Add(deviation >= avg_shifts_per_person - staff_total_shifts)
 
@@ -140,15 +127,14 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
         staff_total = starting_points + staff_new_points
 
         # Deviation from target 
-        deviation = model.NewIntVar(0, 1000, f"dev_{staff.name}")
+        safe_name = "".join(filter(str.isalnum, staff.name))
+        p_deviation = model.NewIntVar(0, 1000, f"p_dev_{safe_name}")
         
         # Basicaly calculating absolute value 
-        model.Add(deviation >= staff_total - target_avg) 
-        model.Add(deviation >= target_avg - staff_total)
+        model.Add(p_deviation >= staff_total - target_avg) 
+        model.Add(p_deviation >= target_avg - staff_total)
 
-        total_penalties.append(deviation * 10)
-
-
+        total_penalties.append(p_deviation * 10)
 
     # 9. Soft Constraint: Standard Staff to Avoid Weekends
     for s_idx, shift in enumerate(shifts):
@@ -157,7 +143,7 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
             for staff in staff_list:
                 # if they are NOT a weekend-only worker, they should not be here
                 if staff.role != Role.WEEKEND_ONLY:
-                    # Penalty of 5 points for every weekedn shift given to standard staff
+                    # Penalty of 5 points for every weekend shift given to standard staff
                     # (Weight lower than Balancing so fairness wins if there's a conflict)
                     total_penalties.append(assignments[(staff.name, s_idx)] * 5)
     
@@ -167,27 +153,29 @@ def assign_staff_to_shifts_csp(shifts: List[Shift], staff_list: List[Staff]):
     # 11. Initialize Solver
     solver = cp_model.CpSolver()
     
-    # Set a time_limit (optional, but good if the roster is huge)
-    # solver.parameters.max_time_in_seconds = 30.0
-
     # 12. Tell solver to run
     status = solver.Solve(model)
 
-    # Status
-    # OPTIMAL,The solver found the absolute best roster with the lowest possible fines.
-    # FEASIBLE,"It found a working roster, but it might not be the ""perfect"" one yet."
-    # INFEASIBLE,"Conflict! Your rules are impossible to follow (e.g., 10 shifts to fill, but only 1 staff member)."
+    # Status handling
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         print(f"Roster generated! Score: {solver.ObjectiveValue()}")
 
-        # Loop through shifts and staff to see who was assigned where
-        for s_idx, shift in enumerate(shifts):
+        results = [] # Start an empty list
+        
+        for s_idx, s_obj in enumerate(shifts):
             for staff in staff_list:
-                # Ask the solver: "Did you set this specific switch to 1?"
+                # Check if this staff member was assigned to this shift
                 if solver.Value(assignments[(staff.name, s_idx)]) == 1:
-                       # Assign staff to shift
-                       shift.assigned_staff = staff
-        return shifts # Return updated list
+                    # UPDATE Staff object's YTD points immediately
+                    staff.ytd_points += s_obj.type.points
+                    
+                    # Create a "Row" for our future table
+                    results.append({
+                        "Date": s_obj.date,
+                        "Shift": s_obj.type.name, # e.g., "WEEKDAY_PM"
+                        "Staff": staff.name
+                    })
+        return results # Send the list back to app.py
     else:
         print("No solution found. Try loosening your Hard Constraints")
         return None
@@ -202,5 +190,5 @@ if __name__ == "__main__":
     if results:
         print("\n--- Final Roster ---")
         for s in results:
-            staff_name = s.assigned_staff.name if s.assigned_staff else "NONE"
-            print(f"{s.date} | {s.type.name} | {staff_name}")
+            # Using dictionary keys as updated in the results loop
+            print(f"{s['Date']} | {s['Shift']} | {s['Staff']}")
